@@ -31,6 +31,21 @@ ARGUMENTS: <populated by Claude Code from user input — parse in Phase 0>
 - For kanban mode: after EVERY state change, write session-state.json AND `touch $SESSION_DIR/active` (refreshes stop-hook inactivity timer).
 - You have full access to goodmem, serena, context7, obsidian, playwright, and every other MCP server in the session. USE THEM for research, code navigation, prior learnings, and verification.
 
+**Scrum-master integration** (pervasive — not just at finalization):
+- The scrum-master plugin (`scrum-master:scrum-master`) is your partner throughout the sweep, not a tool you call once at the end.
+- **Before planning**: dispatch scrum-master in `deps` mode to get the dependency graph. Use it to determine which stories to unblock first and which to defer.
+- **During planning**: dispatch scrum-master in `plan-waves` mode to get its recommendation for wave ordering based on dependency chains. Incorporate its output into your wave plan (Phase 2 Step 5).
+- **After each wave completes**: dispatch scrum-master in `update` mode to update story states on the board. Don't wait until Phase 6.
+- **When stories finish**: update story state to `Done` with evidence immediately (not batched at the end). The board should reflect reality at every moment.
+- **When stories block**: dispatch scrum-master to update the blocked story AND to re-evaluate what other stories are now unblocked by completed dependencies.
+- **At finalization**: dispatch scrum-master in `validate` + `update` mode for final board sync.
+- Cost guard applies to every scrum-master dispatch. But don't avoid calling it to save the counter — board accuracy and dependency awareness are worth the cost.
+
+**Proactive skill and plugin usage** (non-negotiable):
+- You are the team lead of a TEAM. A team uses every tool at its disposal. When you finish implementing iOS code, you dispatch the iOS review plugin. When you finish TypeScript code, you dispatch the TypeScript review plugin. When you touch infrastructure, you use the Railway plugin. This is not optional.
+- After EVERY batch of implementation work, ask: "what domain-specific review/verification plugin should I dispatch for this codebase?" If the answer is anything other than "none exist", dispatch it.
+- The per-story reviewer skill routing from Phase 2 is a FLOOR, not a ceiling. If you see a more relevant plugin or skill at runtime, use it.
+
 ## Phase 0: Parse, detect, and mode selection
 
 ### Step 1: Parse scope from ARGUMENTS
@@ -246,6 +261,17 @@ If GoodMem is not installed, skip this step. Fall back to reading project CLAUDE
 
 Note relevant memories for the wave-planning step (Phase 2) — especially any prior gotchas for this project.
 
+### Step 1.5: Scrum-master dependency graph
+
+Dispatch `scrum-master:scrum-master` in `deps` mode to get the current dependency graph as a Mermaid DAG. This tells you:
+- Which stories are truly ready (all blockers Done)
+- Which stories should be prioritized because they UNBLOCK other stories (dependency-bearing)
+- Which stories are terminal (nothing depends on them — lower dispatch priority)
+
+**Dependency-bearing stories get priority**: if story A blocks stories B, C, D — dispatch A first, even if it's lower priority. Completing A unlocks 3 more stories for the next wave. This maximizes throughput.
+
+Cost guard applies. If scrum-master plugin is not installed, fall back to parsing `dependencies.blocked-by` from story YAML directly.
+
 ### Step 2: Read and filter stories
 
 For each file matching `{BOARD_PATH}/*.md`:
@@ -351,12 +377,27 @@ Record the routing decision per story (`skill_primary`, `skill_secondary`, `mcp_
 
 ### Step 3: Build file-ownership matrix
 
-For each story, extract `scope.include` patterns. Compute directory prefixes:
-- Each pattern `foo/bar/**/*.ts` → prefix `foo/bar/`
-- Each pattern `src/auth/*` → prefix `src/auth/`
-- Each pattern `*.swift` → prefix is repo root (treat as root-level, high collision risk)
+For each story, extract `scope.include` patterns. Resolve them to ACTUAL file lists:
 
-Two stories share a prefix (high conflict risk) if any prefix from story A is a prefix of (or equal to) any prefix from story B.
+```bash
+# For each story, expand globs to concrete file paths
+for story in stories:
+  FILES=$(git ls-files -- ${story.scope.include_patterns})
+  story.resolved_files = FILES
+  story.resolved_dirs = unique parent directories of FILES
+```
+
+**Directory-level conflict detection** (NOT prefix-based):
+
+Two stories conflict if they share ANY concrete file OR directory. The old prefix-based heuristic collapsed all `*.swift` stories to "repo root" — making every iOS story sequential. This is wrong. Stories touching `Sources/Networking/` and `Sources/UI/` are independent even if both are Swift.
+
+```
+For story A and story B:
+  conflict = (A.resolved_dirs ∩ B.resolved_dirs) is non-empty
+           OR (A.resolved_files ∩ B.resolved_files) is non-empty
+```
+
+If `scope.include` contains only a bare extension glob (`*.swift`, `*.ts`) with no directory qualifier, expand it against the actual file system to get real directories. Do NOT fall back to "repo root" — that's the bug that kills parallelism.
 
 ### Step 4: Import edge discovery (bounded)
 
@@ -371,25 +412,26 @@ Activate serena for the project (`mcp__plugin_serena_serena__activate_project`).
 2. Add an import edge from the importing story to the imported file's owning story
 
 **If TOTAL_FILES > 50:**
-Skip serena calls. Use the directory-prefix heuristic only (Step 3).
+Skip serena calls. Use the directory-level conflict matrix only (Step 3).
 
 **After import discovery**: release serena activation — each agent dispatched later will activate its own serena instance scoped to its context. Serena is session-scoped; holding activation during dispatch causes races.
 
 ### Step 5: Group into waves
 
 Using the file-ownership matrix + import edges, partition stories into waves:
-- Two stories CAN share a wave only if their prefix sets share NO common directory prefix (and no import edge)
-- File ownership is PREFIX-BASED: new files created by a developer inherit the parent directory's ownership. If two stories could create files in the same directory, they cannot be in the same wave.
+- Two stories CAN share a wave only if they have NO conflicting directories/files (Step 3) and no import edge (Step 4)
 - Within each wave, sort by priority (P0 → P1 → P2 → P3) then by effort (S → M → L → XL, smallest-diff-first)
 - Cap at `max_parallel_per_wave` (default **4** — Max-plan practical ceiling per anthropics/claude-code#44481; override via `.claude/dev.local.md`) agents per wave
+- **MAXIMIZE PARALLELISM**: the goal is to pack as many non-conflicting stories per wave as possible, not to be conservative. If stories touch different directories, they go in the same wave. One-story waves are a failure of wave planning, not a safety feature.
 
 Produce a wave plan:
 ```
-Wave 1: [story-id-A, story-id-B]
-Wave 2: [story-id-C]
-Wave 3: [story-id-D, story-id-E]
+Wave 1: [story-id-A, story-id-B, story-id-C, story-id-D]  (4 non-conflicting stories)
+Wave 2: [story-id-E, story-id-F]                            (2 stories that conflict with wave 1)
 ...
 ```
+
+**Self-check**: if the wave plan has more waves than `ceil(story_count / max_parallel_per_wave)`, the conflict detection is too aggressive. Re-examine whether the conflicts are real directory overlaps or false positives from overly broad glob patterns.
 
 ### Step 6: Large-sweep announcement
 
@@ -788,7 +830,7 @@ Dependencies (already merged):
 6. Write result.json to the session blackboard (see template below).
 7. Anti-slop pass: invoke `anti-slop:slop-check` skill on written code/prose.
 8. Pre-claim verification: invoke `superpowers:verification-before-completion` before reporting success.
-9. WRITE TO MEMORY if you learned anything non-obvious (debugged >5min, hit a gotcha, found a fix) AND the user has GoodMem (or similar memory system) configured. Template:
+9. WRITE TO MEMORY if you learned anything non-obvious (debugged >5min, hit a gotcha, found a fix):
    ```
    goodmem_memories_create({
      space_id: "<your-learnings-space-uuid>",
@@ -906,6 +948,20 @@ After all merges (and conflict deferrals) for the current wave:
 
 Write session-state.json with `current_wave` incremented. Touch `$SESSION_DIR/active`.
 
+### Step 8: Update board + re-evaluate dependencies
+
+After each wave (not just at finalization):
+
+1. **Update story states on the board**: for each successfully merged story, edit its YAML to `state: In Review` (not Done yet — review hasn't happened). For failed stories, update to `state: Blocked` with reason.
+2. **Dispatch scrum-master in `update` mode**: regenerate the board view so it reflects current reality.
+3. **Re-evaluate dependencies**: dispatch scrum-master in `deps` mode. Stories that were blocked by stories completed in THIS wave may now be unblockable. If newly unblocked stories exist:
+   - Add them to future waves in the wave plan
+   - Re-run Step 5 (wave grouping) for remaining stories to incorporate the newly unblocked ones
+   - Announce: `"Wave {N} unblocked {COUNT} additional stories: {IDS}. Added to wave plan."`
+4. Cost guard applies to each scrum-master dispatch.
+
+This is the key to maximizing throughput: completing dependency-bearing stories early unblocks downstream work, and the team lead must detect and act on this immediately — not wait until finalization.
+
 Proceed to Phase 4.
 
 ## Phase 4: Review (KANBAN MODE, per wave, after merge)
@@ -914,21 +970,70 @@ Three review stages per wave. All three stages complete before consolidation.
 
 ### Stage 1: Opus spec/quality reviewer (per story)
 
-For each story in the wave, dispatch a reviewer agent:
+For each story in the wave, dispatch a reviewer agent with a FULL briefing — not a terse stub. The reviewer must know which domain skill to invoke and must actually call it via the Skill tool.
 
-```
+**Before dispatching reviewers**: look up the `skill_review` for each story from Phase 2 Step 2's reviewer routing table. This is NOT optional.
+
+Dispatch reviewers for ALL stories in the wave as a parallel batch (same single-message contract as Phase 3 Step 3):
+
+````
 Agent({
   subagent_type: "dev:reviewer",
   model: "opus",
-  prompt: "Review the diff for story <ID> against its ACs.
-           Write findings to <SESSION_DIR>/wave-<N>/story-<ID>/review-opus.md via Bash.
-           Focus: spec compliance, code quality, test coverage, behavioral contracts.
-           [+ domain-specific review skill per routing table from Phase 2]
-           REVIEW_OUTPUT_PATH=<SESSION_DIR>/wave-<N>/story-<ID>/review-opus.md"
-})
+  prompt: "REVIEW BRIEFING
+
+== STORY ==
+Story ID: {STORY_ID}
+Title: {STORY_TITLE}
+
+== ACCEPTANCE CRITERIA (the spec — check each one) ==
+{STORY_ACCEPTANCE_CRITERIA}
+
+== DIFF TO REVIEW ==
+```
+{GIT_DIFF_FOR_THIS_STORY}
 ```
 
-**Before each dispatch**: run the cost guard check (Phase 3 Step 2). **After each return**: increment `agents_dispatched` in session-state.json. Touch `$SESSION_DIR/active`.
+== STEP 1: INVOKE DOMAIN REVIEW SKILL (MANDATORY) ==
+Use the Skill tool to invoke: {REVIEW_SKILL}
+
+This is the domain-specific review plugin for this codebase. It provides
+structured review dimensions, severity ratings, and domain expertise
+that a generic review cannot match. Invoke it FIRST, then layer your
+own AC verification on top of its findings.
+
+{REVIEW_SKILL} is one of:
+- ios-code-review:review-ios (Swift/SwiftUI/UIKit — App Review + engineering)
+- typescript-senior-review:review-typescript (TypeScript — 18 dimensions)
+- superpowers:requesting-code-review (generic fallback)
+
+== STEP 2: AC VERIFICATION ==
+Check each AC assertion against the diff. Does the diff satisfy it?
+
+== STEP 3: CODE QUALITY ==
+Check: naming, patterns, error handling, test coverage, behavioral contracts.
+Check for AI cheat patterns: test modification, weak assertions, debug leftovers.
+
+== OUTPUT ==
+Write findings to the blackboard via Bash:
+REVIEW_OUTPUT_PATH={SESSION_DIR}/wave-{WAVE}/story-{STORY_ID}/review-opus.md
+
+Use the standard review format (must-fix / should-fix / nit / AC table).
+
+== ADDITIONAL TOOLS ==
+You have full access to every tool, skill, MCP server, and plugin:
+- context7: verify library API usage is correct
+- serena: trace symbol references to check for missed callers
+- playwright: screenshot UI changes for visual verification
+- goodmem: check for known issues with patterns used in the diff
+- WebSearch: verify claims, check for known CVEs
+"
+})
+````
+
+**Parallel dispatch**: emit all reviewer Agent blocks for the wave in ONE message (same contract as developer dispatch). Reviewers are independent — they read different diffs.
+
+**Before each dispatch**: run the cost guard check (Phase 3 Step 2). **After the batch returns**: increment `agents_dispatched` by batch size in session-state.json. Touch `$SESSION_DIR/active`.
 
 ### Stage 2: CodeRabbit CLI (per wave)
 
@@ -1035,11 +1140,60 @@ If still failing after 2 fix-pass rounds:
  Next: wave N+1 (or finalize if last wave)."
 ```
 
-After Phase 5 completes (or is skipped), loop back to Phase 3 for the next wave. When all waves are complete, proceed to Phase 6.
+After Phase 5 completes (or is skipped), loop back to Phase 3 for the next wave. When all waves are complete, proceed to Phase 5.5 (comprehensive domain review).
+
+## Phase 5.5: Comprehensive domain review (KANBAN MODE, after all waves)
+
+**After ALL waves complete but BEFORE Phase 6 (finalize/merge)**, run a comprehensive domain review using the appropriate review plugin. This is the whole-project lens that catches cross-story issues the per-story reviewers miss.
+
+### Step 1: Detect the dominant domain
+
+Look at the `skill_review` assignments from Phase 2. Pick the most-used domain review skill across all stories:
+
+| Dominant domain | Review plugin to dispatch | Scope |
+|---|---|---|
+| iOS / Swift / SwiftUI | `ios-code-review:review-ios` | `diff` against target branch (reviews all changes from the sweep) |
+| TypeScript | `typescript-senior-review:review-typescript` | `diff` against target branch |
+| Mixed (no dominant) | Dispatch BOTH the top-2 domain plugins | Each scoped to its own file types |
+| Generic only | Skip Phase 5.5 — per-story reviews + CodeRabbit + Codex already covered it |
+
+### Step 2: Dispatch the domain review plugin
+
+This is NOT a `dev:reviewer` agent. Dispatch the ACTUAL domain review plugin agent directly:
+
+```
+Agent({
+  subagent_type: "ios-code-review:senior-ios-reviewer",   // or typescript-senior-review:senior-typescript-reviewer
+  model: "opus",
+  prompt: "Comprehensive review of all changes from the dev sweep.
+           Scope: diff against <target-branch> (all stories merged to integration branch).
+           This is a full-project review, not a per-story review.
+           Focus on cross-cutting concerns: architecture coherence, naming consistency
+           across stories, shared state mutations, concurrency safety, API surface changes."
+})
+```
+
+**Before dispatch**: cost guard check. **After return**: increment counter. Touch `$SESSION_DIR/active`.
+
+### Step 3: Process domain review findings
+
+If the domain review produces must-fix findings:
+1. Dispatch `dev:fix-pass` with the domain review findings (same 2-round cap as Phase 5)
+2. Re-run the domain review after fix-pass to confirm fixes
+3. If still failing after 2 rounds: halt, report findings to user, do NOT proceed to Phase 6
+
+Write domain review output to `$SESSION_DIR/review-domain-comprehensive.md`.
+
+### Step 4: Announce
+
+```
+"Comprehensive {domain} review complete: N must-fix, N should-fix, N nits.
+ {Fixed N must-fix items via fix-pass. | No must-fix items — proceeding to finalize.}"
+```
 
 ## Phase 6: Finalize (KANBAN MODE)
 
-After all waves complete:
+After all waves AND the comprehensive domain review complete:
 
 ### Step 1: Local test suite
 

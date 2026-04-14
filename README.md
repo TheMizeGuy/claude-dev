@@ -89,7 +89,7 @@ User
   v
 Lead (SKILL.md, Opus 4.6)
   |
-  |-- scrum-master integration  (story pull, board updates — optional)
+  |-- scrum-master integration  (deps, board updates, wave planning — throughout lifecycle)
   |-- dev:developer             (implementation, worktree-isolated)
   |-- dev:reviewer              (read-only code review)
   |-- dev:fix-pass              (rework on integration branch)
@@ -117,9 +117,10 @@ Integration branch --> target branch (ff-only)
 | 0 | Parse scope, auto-detect project + CI pipeline, check for interrupted session, pick mode |
 | 1 | Recon: read stories, query memory (if configured), map codebase |
 | 2 | Plan: assign stories to waves, route skills, set up session dir + stop-hook + integration branch |
-| 3 | Execute: dispatch developers in parallel (worktree-isolated, up to 4/wave), merge per-story to integration, run tests |
-| 4 | Review: dispatch reviewer + Codex cross-review + CodeRabbit per wave |
+| 3 | Execute: dispatch developers in parallel (worktree-isolated, up to 4/wave), merge per-story to integration, run tests, update board + re-evaluate deps after each wave |
+| 4 | Review: dispatch reviewer (with domain review skill) + Codex cross-review + CodeRabbit per wave |
 | 5 | Fix-pass: consolidate findings, dispatch fix-pass agent if must-fix items exist |
+| 5.5 | Comprehensive domain review: dispatch the full domain review plugin (ios-code-review, typescript-senior-review) for whole-project analysis |
 | 6 | Finalize: local test suite → **CI/CD gate (mandatory if pipeline detected)** → ff-only merge to target → update kanban board → clean up |
 | 7 | Report: summary table with CI status, learnings written to memory (if configured) |
 
