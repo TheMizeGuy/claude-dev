@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-dev",
+  "description": "Marketplace for the dev plugin: autonomous multi-agent development team orchestrator for Claude Code.",
+  "owner": {
+    "name": "mize"
+  },
+  "plugins": [
+    {
+      "name": "dev",
+      "description": "Autonomous multi-agent development team orchestrator. Lead Opus 4.6 agent dispatches developer/reviewer/fix-pass subagents in KANBAN or AD-HOC mode with worktree isolation and three-stage review.",
+      "source": "./dev",
+      "version": "0.1.0",
+      "category": "workflow",
+      "homepage": "https://github.com/TheMizeGuy/claude-dev"
+    }
+  ]
+}
