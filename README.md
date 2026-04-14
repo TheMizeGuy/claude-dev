@@ -105,23 +105,23 @@ Integration branch --> target branch (ff-only)
 | Agent | Model | Tools | Purpose |
 |---|---|---|---|
 | Lead (SKILL.md) | Opus 4.6 | Full session tool set (Agent, Read, Write, Bash, Glob, Grep, Skill, all MCPs) | Orchestrates all phases; dispatches every subagent; merges branches; updates board |
-| `dev:developer` | Opus 4.6 | Edit, Read, Write, Bash, Glob, Grep, Skill, + optional MCPs (goodmem, serena, context7, obsidian) | Implements one story in worktree isolation; TDD discipline; commits with story-ID prefix |
-| `dev:reviewer` | Opus 4.6 | Read, Bash, Glob, Grep, Skill, + optional read-only MCPs | Reviews one story's diff against ACs; read-only (no Edit/Write/Agent) |
-| `dev:fix-pass` | Opus 4.6 | Same as developer | Applies must-fix/should-fix findings on integration branch; no Agent tool |
+| `dev:developer` | Opus 4.6 | Full session tool set; Agent architecturally forbidden (no sub-delegation) | Implements one story in worktree isolation; TDD discipline; commits with story-ID prefix |
+| `dev:reviewer` | Opus 4.6 | Full session tool set; Edit/Write/Agent architecturally forbidden (read-only) | Reviews one story's diff against ACs; writes findings via Bash heredoc only |
+| `dev:fix-pass` | Opus 4.6 | Full session tool set; Agent architecturally forbidden (no sub-delegation) | Applies must-fix/should-fix findings on integration branch |
 | `secondary-lead-DO-NOT-DISPATCH` | — | — | Documentation only. Preserves intended architecture for when #46424 is fixed |
 
 ### Execution phases (KANBAN mode)
 
 | Phase | What happens |
 |---|---|
-| 0 | Parse scope, auto-detect project, check for interrupted session, pick mode |
+| 0 | Parse scope, auto-detect project + CI pipeline, check for interrupted session, pick mode |
 | 1 | Recon: read stories, query memory (if configured), map codebase |
 | 2 | Plan: assign stories to waves, route skills, set up session dir + stop-hook + integration branch |
-| 3 | Execute: dispatch developers (worktree-isolated), merge per-story to integration, run tests |
+| 3 | Execute: dispatch developers in parallel (worktree-isolated, up to 4/wave), merge per-story to integration, run tests |
 | 4 | Review: dispatch reviewer + Codex cross-review + CodeRabbit per wave |
 | 5 | Fix-pass: consolidate findings, dispatch fix-pass agent if must-fix items exist |
-| 6 | Finalize: ff-only merge to target, update kanban board, clean up worktrees |
-| 7 | Report: summary table, learnings written to memory (if configured) |
+| 6 | Finalize: local test suite → **CI/CD gate (mandatory if pipeline detected)** → ff-only merge to target → update kanban board → clean up |
+| 7 | Report: summary table with CI status, learnings written to memory (if configured) |
 
 AD-HOC mode collapses this to: recon → decompose → dispatch (per work item) → review → fix-pass if needed → report. No session-state, no stop-hook, no integration branch.
 
@@ -147,11 +147,13 @@ Content below the YAML frontmatter is passed verbatim to the lead.
 | Field | Default | Purpose |
 |---|---|---|
 | `target_branch` | auto-detected (`main`, `dev`, etc.) | Branch to ff-only merge into after sweep |
-| `max_parallel` | `3` | Max concurrent developer agents per wave |
+| `max_parallel` | `4` | Max concurrent developer agents per wave |
 | `max_fix_rounds` | `2` | Max review-fix iterations before escalating to Blocked |
 | `codex_review` | `true` | Enable Codex adversarial cross-review (requires `codex` plugin) |
 | `coderabbit_review` | `true` | Enable CodeRabbit CLI pre-merge scan (requires `cr` CLI) |
 | `goodmem_space` | unset | Project-specific GoodMem space UUID for retrieval (requires `goodmem` MCP) |
+| `ci_type` | auto-detected | Override CI type (`github-actions`, `gitlab-ci`, `jenkins`, `circleci`, etc.) |
+| `ci_skip` | `false` | Set to `true` to skip the CI gate entirely |
 
 All integrations are optional. The plugin degrades gracefully:
 
@@ -173,17 +175,20 @@ All integrations are optional. The plugin degrades gracefully:
 | `agents/fix-pass.md` | Rework agent definition |
 | `agents/secondary-lead-DO-NOT-DISPATCH.md` | Architecture reference (non-functional, pending #46424) |
 | `hooks/dev-sweep-stop-gate.sh` | Session-scoped stop-hook; blocks session end while sweep is active |
+| `hooks/dev-sweep-watch.sh` | Live CLI dashboard; run in a separate terminal during sweeps |
 | `README.md` | This file |
 
 ## Key rules
 
 1. Lead dispatches ALL agents. No secondary leads in the current runtime.
 2. Every developer runs in worktree isolation (`isolation: "worktree"`) in KANBAN mode.
-3. Tests gate every merge. Integration branch failure rolls back to last-good checkpoint.
-4. Three-stage review: spec compliance (`dev:reviewer`) + adversarial (Codex) + automated (CodeRabbit) — any stage is skippable if the integration isn't present.
-5. Fix code to match tests, never the reverse. No test modification in implementation commits.
-6. Session state persists to `.claude/dev-sessions/<id>/session-state.json` for resume in KANBAN mode.
-7. Stop-hook prevents premature session termination while sweep is active. Activity-based TTL (default 1h of inactivity releases).
+3. Developers dispatched in parallel (up to `max_parallel` per wave, default 4) in a single message block.
+4. Tests gate every merge. Integration branch failure rolls back to last-good checkpoint.
+5. **CI/CD pipeline gate is mandatory** if a CI config is detected. No merge without CI green. Override with `ci_skip: true`.
+6. Three-stage review: spec compliance (`dev:reviewer`) + adversarial (Codex) + automated (CodeRabbit) — any stage is skippable if the integration isn't present.
+7. Fix code to match tests, never the reverse. No test modification in implementation commits.
+8. Session state persists to `.claude/dev-sessions/<id>/session-state.json` for resume in KANBAN mode.
+9. Stop-hook prevents premature session termination while sweep is active. Activity-based TTL (default 1h of inactivity releases).
 
 ## Related plugins this pairs well with
 

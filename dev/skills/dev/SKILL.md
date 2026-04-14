@@ -78,6 +78,44 @@ Gather via parallel tool calls:
    ```bash
    git log --oneline -20 2>/dev/null || echo "no git"
    ```
+7. **CI/CD pipeline detection:**
+   ```bash
+   # Detect CI config files (check all common locations in parallel)
+   CI_TYPE="none"
+   CI_CONFIG=""
+   if [[ -d ".github/workflows" ]] && ls .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null | head -1 > /dev/null; then
+     CI_TYPE="github-actions"
+     CI_CONFIG=".github/workflows/"
+   elif [[ -f ".gitlab-ci.yml" ]]; then
+     CI_TYPE="gitlab-ci"
+     CI_CONFIG=".gitlab-ci.yml"
+   elif [[ -f "Jenkinsfile" ]]; then
+     CI_TYPE="jenkins"
+     CI_CONFIG="Jenkinsfile"
+   elif [[ -f ".circleci/config.yml" ]]; then
+     CI_TYPE="circleci"
+     CI_CONFIG=".circleci/config.yml"
+   elif [[ -f "bitbucket-pipelines.yml" ]]; then
+     CI_TYPE="bitbucket"
+     CI_CONFIG="bitbucket-pipelines.yml"
+   elif [[ -f ".travis.yml" ]]; then
+     CI_TYPE="travis"
+     CI_CONFIG=".travis.yml"
+   elif [[ -f "azure-pipelines.yml" ]]; then
+     CI_TYPE="azure-devops"
+     CI_CONFIG="azure-pipelines.yml"
+   elif [[ -f "Taskfile.yml" ]] || [[ -f "Earthfile" ]]; then
+     CI_TYPE="task-or-earth"
+     CI_CONFIG="Taskfile.yml or Earthfile"
+   fi
+   # Check for remote (needed to push integration branch for CI)
+   HAS_REMOTE=$(git remote -v 2>/dev/null | head -1 || echo "")
+   echo "CI_TYPE=$CI_TYPE CI_CONFIG=$CI_CONFIG HAS_REMOTE=${HAS_REMOTE:+yes}"
+   ```
+
+   Record `CI_TYPE`, `CI_CONFIG`, and `HAS_REMOTE` for the CI gate in Phase 6. Override via `ci_type` and `ci_skip` in `.claude/dev.local.md` YAML frontmatter.
+
+   **If `CI_TYPE != "none"`, the CI gate in Phase 6 is MANDATORY.** No merge to target branch without CI green. See Phase 6 Step 2.
 
 ### Step 3: Validate
 
@@ -158,7 +196,15 @@ done
 
 6. **Fix-pass**: if must-fix findings exist, dispatch `dev:fix-pass` directly on the main working branch (no integration branch in ad-hoc mode — fixes apply in place). The 2-round cap from kanban mode still applies: if findings persist after 2 rounds, surface them to the user without further fix-pass attempts.
 
-7. **Report**: structured summary of what was done, what was reviewed, what issues were found and resolved.
+7. **CI gate** (MANDATORY if CI detected in Phase 0 Step 2, same rules as Phase 6 Step 2):
+   - If `CI_TYPE != "none"` AND `HAS_REMOTE` is set AND `ci_skip` is not `true`:
+     1. Push the current branch to remote
+     2. Wait for CI to complete (same polling logic as Phase 6 Step 2b)
+     3. If CI fails: dispatch fix-pass with CI failure logs, 2-round cap, re-push after each fix
+     4. **Do NOT report success until CI is green or skipped**
+   - If CI is not applicable: skip with announcement
+
+8. **Report**: structured summary of what was done, what was reviewed, what issues were found and resolved. Include CI status: `CI: <pass|fail|skip|timeout> (<run-url>)`.
 
 Ad-hoc mode does NOT require: kanban stories, session-state.json, stop-hook, integration branch, wave planning. It's a lighter-weight orchestration for direct tasks. Use git branches and worktrees as needed but without the full sweep infrastructure.
 
@@ -177,8 +223,6 @@ When the task scope includes this plugin's own files (the plugin install directo
 ## Phase 1: Recon (KANBAN MODE)
 
 ### Step 1: GoodMem retrieve
-
-Query prior learnings for this task topic. Always query Learnings + UserContext; add project space if configured:
 
 If GoodMem is configured in your environment, query your Learnings space (or any other configured space) for prior art on this task. Template:
 
@@ -337,7 +381,7 @@ Using the file-ownership matrix + import edges, partition stories into waves:
 - Two stories CAN share a wave only if their prefix sets share NO common directory prefix (and no import edge)
 - File ownership is PREFIX-BASED: new files created by a developer inherit the parent directory's ownership. If two stories could create files in the same directory, they cannot be in the same wave.
 - Within each wave, sort by priority (P0 → P1 → P2 → P3) then by effort (S → M → L → XL, smallest-diff-first)
-- Cap at `max_parallel_per_wave` (default 2) agents per wave
+- Cap at `max_parallel_per_wave` (default **4** — Max-plan practical ceiling per anthropics/claude-code#44481; override via `.claude/dev.local.md`) agents per wave
 
 Produce a wave plan:
 ```
@@ -388,15 +432,25 @@ Update `.claude/settings.local.json` to register the stop-hook. Use absolute pat
 
 ```bash
 # Example pseudo-JSON merge (the actual implementation reads existing settings.local.json,
-# adds the Stop hook entry if missing, and writes back):
+# adds the Stop hook entry AND the dev-sessions allow rules if missing, and writes back):
 #
 # {
+#   "permissions": {
+#     "allow": [
+#       "Write(./.claude/dev-sessions/**)",
+#       "Edit(./.claude/dev-sessions/**)",
+#       "Read(./.claude/dev-sessions/**)",
+#       "Bash(touch .claude/dev-sessions/**)",
+#       "Bash(mkdir -p .claude/dev-sessions/**)",
+#       "Bash(rm -rf .claude/dev-sessions/**)"
+#     ]
+#   },
 #   "hooks": {
 #     "Stop": [
 #       {
 #         "hooks": [{
 #           "type": "command",
-#           "command": "DEV_SESSION_DIR='$SESSION_DIR' ${CLAUDE_PLUGIN_ROOT}/hooks/dev-sweep-stop-gate.sh",
+#           "command": "DEV_SESSION_DIR='$SESSION_DIR' <plugin-install-dir>/hooks/dev-sweep-stop-gate.sh",
 #           "timeout": 10000
 #         }]
 #       }
@@ -405,7 +459,9 @@ Update `.claude/settings.local.json` to register the stop-hook. Use absolute pat
 # }
 ```
 
-Read existing `.claude/settings.local.json` (may not exist), merge in the dev hook entry, write back. If the user has other Stop hooks already registered, preserve them — append the dev hook to the list.
+Read existing `.claude/settings.local.json` (may not exist), merge in the dev hook entry AND the allow rules for `.claude/dev-sessions/**`, write back. If the user has other Stop hooks or allow rules already registered, preserve them — append the dev entries. Deduplicate allow rules by exact-match string.
+
+**Why the allow rules matter**: the team lead writes `session-state.json` and touches the `active` marker after every state change (dispatch, return, merge, review). If the user's global `defaultMode` is not `bypassPermissions` OR a project-level setting overrides it, each write to a new `$SESSION_ID` directory triggers a permission prompt. The explicit allow rules survive `defaultMode` overrides and cover the full lifecycle (Write, Edit, Read, touch, mkdir, rm -rf for Phase 0 Step 5 cleanup).
 
 ### Step 11: Announce wave plan
 
@@ -421,7 +477,9 @@ Wave plan (N waves, M stories):
 | ... | ... | ... | ... |
 
 Cost guard: max X agents (default: max(200, stories*10)).
-Estimated duration: Y hours.
+
+Live dashboard: run in another terminal:
+  <plugin-install-dir>/hooks/dev-sweep-watch.sh
 ```
 
 ### Step 12: Initial session-state.json write
@@ -439,6 +497,14 @@ Create the initial state file:
   "agents_dispatched": 0,
   "max_agents_per_session": <computed: max(200, story_count * 10)>,
   "checkpoint_before_current_wave": null,
+  "ci": {
+    "type": "<CI_TYPE from Phase 0 detection>",
+    "config": "<CI_CONFIG path>",
+    "has_remote": <true|false>,
+    "status": "pending",
+    "run_url": null,
+    "fix_pass_rounds": 0
+  },
   "stories": {
     "MG2-NET-01": {
       "state": "Ready",
@@ -472,6 +538,20 @@ Proceed to Phase 3.
 ## Phase 3: Execute (KANBAN MODE, per wave, strictly sequential)
 
 **Invariant: Phase 5 (fix-pass) of wave N MUST complete before Phase 3 of wave N+1 begins. No overlap between waves.**
+
+**Wave-level concurrency**: within a single wave, developer dispatches run CONCURRENTLY (see Step 3 dispatch contract). Across waves is sequential. Across review stages within a wave is sequential.
+
+### Step 0: Scrum-master consultation (dependency/AC gate)
+
+Before touching story state, check whether the wave needs scrum-master involvement:
+
+| Trigger | Action |
+|---|---|
+| Any story in the wave has `dependencies.blocked-by` entries not marked `Done` in session-state.json | Dispatch `scrum-master:scrum-master` in `deps` mode to recompute dependency graph. If still blocked, drop the story from this wave and re-plan waves |
+| Any story's ACs reference symbols, files, or APIs that grep can't find in the project | Dispatch `scrum-master:scrum-master` in `validate` mode for that story. If validate flags the story, move to Blocked and drop from this wave |
+| Any story has `effort: XL` OR `acceptance` list has >5 entries | Dispatch `scrum-master:scrum-master` with a split request. Use its decomposition output as the new wave plan |
+
+Each dispatch is subject to the cost guard (Step 2). Skip this step entirely if the wave passes all three triggers cleanly — no gratuitous scrum-master calls.
 
 ### Step 1: Move stories to In Progress
 
@@ -526,22 +606,77 @@ Every dispatch (developer, reviewer, Codex, fix-pass, scrum-master, colleague) i
 
 ### Step 3: Dispatch developers
 
-Per story in the current wave, dispatch up to `max_parallel_per_wave` (default 2) developer agents in parallel:
+Per story in the current wave, dispatch up to `max_parallel_per_wave` (default 4) developer agents.
+
+**PARALLEL DISPATCH CONTRACT (non-negotiable):**
+
+You MUST emit all N developer Agent calls for this wave as N separate `tool_use` blocks in a **SINGLE assistant message**. The Claude Code harness only runs Agent calls concurrently when they appear together in one message. Sequential messages = sequential execution, even if you wrote "in parallel" anywhere in your reasoning.
+
+**DO:**
+- One assistant message containing 2-4 `Agent(...)` tool_use blocks side by side
+- Let them all run. Wait for the batch to return. Process all results together.
+
+**DO NOT:**
+- Emit one Agent call, wait for it, then emit the next (this is sequential).
+- Write session-state.json between dispatches within the same wave (that forces serialization — you can't write state you don't yet have).
+- Use `run_in_background: true` for wave agents (you need their results before merging).
+
+**Per-story pre-dispatch gates (run BEFORE emitting the batch):**
+
+| Gate | How | Failure handling |
+|---|---|---|
+| Cost guard | Check Step 2; `agents_dispatched + wave_size <= max_agents_per_session` | Halt, announce, write state |
+| Routed skills populated | For each story, verify `skill_primary` from Phase 2 Step 2 is non-empty and `{ROUTED_SKILLS}` in the briefing is a concrete skill name (not literal `{ROUTED_SKILLS}`) | If empty: re-run Phase 2 Step 2 routing. Do NOT dispatch with blank skill directives |
+| AC sanity | For each story, verify ACs reference symbols/files that exist (grep quickly) | If AC references unverifiable target: dispatch `scrum-master:scrum-master` in `validate` mode for that story first (cost-guarded), then re-gate |
+
+**The batch dispatch (one message, multiple blocks):**
 
 ```
 Agent({
   subagent_type: "dev:developer",
   model: "opus",
   isolation: "worktree",
-  prompt: <developer briefing — see template below>
+  prompt: <developer briefing for story A>
 })
+Agent({
+  subagent_type: "dev:developer",
+  model: "opus",
+  isolation: "worktree",
+  prompt: <developer briefing for story B>
+})
+... up to max_parallel_per_wave ...
 ```
 
-**Before each dispatch**: run the cost guard check (Step 2).
+All blocks go in ONE assistant message. The harness dispatches them concurrently.
 
-**After each dispatch returns**: increment `agents_dispatched` in session-state.json. Update the story entry with `agent_id`, `agent_branch`, `started_at`. Write session-state.json. Touch `$SESSION_DIR/active`.
+**PRE-DISPATCH ANNOUNCEMENT** (print BEFORE the Agent blocks, same message):
 
-**Branch disambiguation**: include the story ID as a nonce in the developer prompt. This mitigates anthropics/claude-code#37873 (deterministic branch-name collision on same-agent-type reruns).
+```
+WAVE {N} DISPATCHING {COUNT} AGENTS
+  [{story-A}] "{title}" -> {skill_primary}
+  [{story-B}] "{title}" -> {skill_primary}
+  ...
+```
+
+**After the batch returns** (all agents done, results in hand):
+
+**POST-DISPATCH STATUS TABLE** (print immediately):
+
+```
+WAVE {N} RESULTS
+| Story | Status | Commits | Tests | Files |
+|---|---|---|---|---|
+| {story-A} | success | {hash} | {pass/fail} | {count} |
+| {story-B} | failed | - | - | - |
+```
+
+Then:
+1. Increment `agents_dispatched` by the batch size.
+2. For each story, update `agent_id`, `agent_branch`, `started_at`, `completed_at`.
+3. Write session-state.json ONCE for the whole batch.
+4. Touch `$SESSION_DIR/active` ONCE.
+
+**Branch disambiguation**: include the story ID as a nonce in each developer prompt. This mitigates anthropics/claude-code#37873 (deterministic branch-name collision on same-agent-type reruns).
 
 #### Developer briefing template
 
@@ -578,15 +713,15 @@ Three sources, in order of specificity:
     ```
     Relevant hits: goodmem_memories_get({id: "<id>", include_content: true})
 
-    If the user has a UserContext (or similar) space configured, query it alongside
-    the Learnings space to pick up persistent user preferences. Skip this step
+    If your GoodMem setup includes a UserContext space, query it to pick up
+    user preferences the main agent already knows. Skip this step
     entirely if GoodMem is not installed.
 
-(b) Obsidian vault — canonical human-readable references (if the user has one)
+(b) Obsidian vault — canonical human-readable references (if configured)
     Search: mcp__obsidian__search_notes({query: "{STORY_TITLE}"})
     Direct read: mcp__obsidian__read_note({filepath: "<topic>/00 - Index.md"})
 
-(c) Serena — project-specific architecture memory (if configured)
+(c) Serena — project-specific architecture memory
     mcp__plugin_serena_serena__list_memories() then read_memory(name)
 
 == STEP 2: INVOKE SKILLS (before writing any code) ==
@@ -666,13 +801,12 @@ Dependencies (already merged):
 9. WRITE TO MEMORY if you learned anything non-obvious (debugged >5min, hit a gotcha, found a fix) AND the user has GoodMem (or similar memory system) configured. Template:
    ```
    goodmem_memories_create({
-     space_id: "{USER_LEARNINGS_SPACE_UUID}",
+     space_id: "<your-learnings-space-uuid>",
      content_type: "text/markdown",
      original_content: "# Title\n\n## Symptom\n...\n## Root cause\n...\n## Fix\n...",
      metadata: {"type": "learning", "topic": "{TOPIC_KEYWORD}", "date": "{TODAY}"}
    })
    ```
-   If no memory system is configured, skip this step.
 10. Report failures honestly. Never claim success without evidence.
 
 == RESULT.JSON TEMPLATE ==
@@ -917,35 +1051,125 @@ After Phase 5 completes (or is skipped), loop back to Phase 3 for the next wave.
 
 After all waves complete:
 
-1. Run full test suite on integration branch
-2. FF merge integration → target branch (`main`/`dev`) if green:
-   ```bash
-   git checkout <target-branch>
-   git merge --ff-only <integration-branch>
-   ```
-   If not fast-forwardable: merge conflict between integration and target. Dispatch fix-pass with the conflict.
-3. Update kanban:
-   - For each completed story: direct YAML edit → `state: Done`, `evidence.commit: <hash>`, `evidence.test_output: <summary>`, `updated: <today>`
-   - Parse-back verify each YAML write
-   - Dispatch `scrum-master:scrum-master` (as general-purpose with inlined agent body) in `validate` mode — schema-checks all edited stories
-   - Dispatch `scrum-master:scrum-master` in `update` mode — regenerates board view
-   (Cost guard check before each dispatch)
-4. Write goodmem learnings (anything non-obvious discovered during sweep)
-5. Write serena memory (if new architecture was mapped)
-6. Clean up:
-   - Prune worktrees: `git worktree prune --verbose`
-   - Remove stop-hook registration from `.claude/settings.local.json` (read, remove the dev hook entry, write back)
-7. Mark session done: `touch $SESSION_DIR/done`
-   Session dir preserved for debugging; cleaned up on next `/dev` invocation (Phase 0 Step 5 handles stale sessions).
-8. Write final session-state.json with all stories at final state
-9. `touch $SESSION_DIR/active` (final refresh before Phase 7 report)
+### Step 1: Local test suite
+
+Run the full test suite on the integration branch. If it fails, dispatch a fix-pass agent. Do NOT proceed until local tests are green.
+
+### Step 2: CI/CD pipeline gate (MANDATORY if CI detected)
+
+**This gate is non-negotiable. If the project has a CI/CD pipeline (detected in Phase 0 Step 2), the integration branch MUST pass CI before ANY merge to the target branch. No exceptions. No "CI is slow, let's merge anyway." No "it passed locally so it's fine."**
+
+**Skip conditions** (only these):
+- `CI_TYPE == "none"` (no CI config detected in Phase 0)
+- `ci_skip: true` in `.claude/dev.local.md` (explicit user opt-out)
+- `HAS_REMOTE` is empty (no git remote configured — can't push)
+
+**If skipping**: announce `"CI gate skipped: <reason>. Proceeding with local-only verification."` and go to Step 3.
+
+**If CI is active**: execute the following sequence:
+
+#### 2a: Push integration branch to remote
+
+```bash
+git push -u origin <integration-branch>
+```
+
+If push fails (auth, permissions, network): announce the failure, do NOT merge, leave the integration branch for manual push. Stop finalization with `"CI gate blocked: push failed. Integration branch preserved at <branch>. Push manually and verify CI before merging."`
+
+#### 2b: Wait for CI to complete
+
+**GitHub Actions** (most common):
+
+```bash
+# Wait for the workflow run to appear (up to 60s — GitHub has propagation delay)
+sleep 5
+gh run list --branch <integration-branch> --limit 1 --json databaseId,status,conclusion
+
+# Poll until completed (max 30 minutes)
+TIMEOUT=1800
+ELAPSED=0
+INTERVAL=30
+while true; do
+  STATUS=$(gh run list --branch <integration-branch> --limit 1 --json status,conclusion --jq '.[0].status')
+  if [[ "$STATUS" == "completed" ]]; then
+    break
+  fi
+  if [[ $ELAPSED -ge $TIMEOUT ]]; then
+    echo "CI_TIMEOUT"
+    break
+  fi
+  sleep $INTERVAL
+  ELAPSED=$((ELAPSED + INTERVAL))
+done
+```
+
+**GitLab CI**: Use `glab ci status` or the GitLab API.
+**Other CI systems**: Use the appropriate CLI or poll the CI system's API.
+
+**During the wait**: announce progress every ~2 minutes:
+```
+CI running on <integration-branch>... (<elapsed>s / <timeout>s)
+```
+
+#### 2c: Evaluate CI result
+
+| CI result | Action |
+|---|---|
+| **All checks pass** | Announce `"CI GREEN on <integration-branch> (<run-url>). Proceeding to merge."` Proceed to Step 3 |
+| **Any check fails** | Announce `"CI FAILED on <integration-branch> (<run-url>)."` Fetch failure details: `gh run view <run-id> --log-failed` (GitHub) or equivalent. Write failure summary to `$SESSION_DIR/ci-failure.md`. **Do NOT merge.** Dispatch fix-pass agent with CI failure logs as context. Re-run CI after fix. Apply 2-round cap same as Phase 5 |
+| **Timeout (30 min)** | Announce `"CI timed out after 30 minutes. Integration branch preserved at <branch>. Monitor CI manually and merge when green."` **Do NOT merge.** Stop finalization |
+| **No workflow triggered** | Announce `"No CI workflow triggered on <integration-branch>. Check CI config: <CI_CONFIG>."` **Do NOT merge.** This often means the workflow file has a branch filter that excludes integration branches — surface this to the user |
+
+**CI fix-pass flow**: if CI fails, the fix-pass dispatch follows the same 2-round cap as Phase 5. After each fix-pass round:
+1. Commit the fix
+2. Push the updated integration branch: `git push origin <integration-branch>`
+3. Wait for CI again (same polling loop)
+4. If green: proceed to Step 3
+5. If still failing after 2 rounds: stop finalization, preserve branch, report failure details
+
+### Step 3: Merge to target branch
+
+FF merge integration → target branch (`main`/`dev`):
+```bash
+git checkout <target-branch>
+git merge --ff-only <integration-branch>
+```
+
+If not fast-forwardable: merge conflict between integration and target. Dispatch fix-pass with the conflict. After fix-pass, re-run local tests AND the CI gate (Step 2) before retrying the merge.
+
+### Step 4: Update kanban
+
+- For each completed story: direct YAML edit → `state: Done`, `evidence.commit: <hash>`, `evidence.test_output: <summary>`, `evidence.ci_status: <pass|skip>`, `evidence.ci_run_url: <url>`, `updated: <today>`
+- Parse-back verify each YAML write
+- Dispatch `scrum-master:scrum-master` (as general-purpose with inlined agent body) in `validate` mode — schema-checks all edited stories
+- Dispatch `scrum-master:scrum-master` in `update` mode — regenerates board view
+(Cost guard check before each dispatch)
+
+### Step 5: Write memories
+
+- Write goodmem learnings (anything non-obvious discovered during sweep)
+- Write serena memory (if new architecture was mapped)
+- If CI failed and was fixed: write a goodmem learning with the CI failure root cause
+
+### Step 6: Clean up
+
+- Prune worktrees: `git worktree prune --verbose`
+- Remove stop-hook registration from `.claude/settings.local.json` (read, remove the dev hook entry, write back)
+- Delete remote integration branch if CI passed and merge succeeded: `git push origin --delete <integration-branch>`
+
+### Step 7: Finalize session
+
+- Mark session done: `touch $SESSION_DIR/done`
+  Session dir preserved for debugging; cleaned up on next `/dev` invocation (Phase 0 Step 5 handles stale sessions).
+- Write final session-state.json with all stories at final state, including `ci_status` and `ci_run_url`
+- `touch $SESSION_DIR/active` (final refresh before Phase 7 report)
 
 ## Phase 7: Report
 
 Print a structured final summary:
 
 ```
-═══ DEV SWEEP COMPLETE ═══
+DEV SWEEP COMPLETE
 
 Stories completed: N/M
 Stories blocked: N
@@ -960,6 +1184,7 @@ Agents dispatched: N
   Scrum-master: V
   Colleagues: U
 Review findings resolved: N must-fix, N should-fix, N nits
+CI/CD: <PASS (<run-url>) | SKIP (<reason>) | FAIL (<run-url>) | TIMEOUT>
 Integration branch: <branch> merged to <target> at <commit-hash>
 Session dir: <path> (preserved for debugging)
 Learnings written: N goodmem memories
@@ -1003,6 +1228,11 @@ The agents/secondary-lead-DO-NOT-DISPATCH.md file preserves the intended future 
 | Wrong skill routed | Compare result.json skills_invoked vs Phase 2 routing | Log to goodmem. No retry — implementation may be correct. | Observability only |
 | YAML write corruption | Parse-back validation | Restore from git, retry. If still fails: scrum-master update mode. | Fall back to scrum-master |
 | Stop-hook JSON parse error | PARSE_OK flag in hook script | Fail-CLOSED: block with diagnostic + touch $DONE_MARKER path | User investigates or releases |
+| CI push failed | git push exit code != 0 | Announce failure, preserve integration branch | User pushes manually, verifies CI |
+| CI check failed | gh run conclusion != "success" | Fetch `gh run view --log-failed`, dispatch fix-pass with CI logs | After 2 fix-pass rounds → halt finalization, preserve branch |
+| CI timeout (30 min) | Polling loop exceeds TIMEOUT | Announce timeout, preserve integration branch | User monitors CI manually, merges when green |
+| No CI workflow triggered | gh run list returns empty for branch | Announce gap (likely branch filter in CI config), do NOT merge | User fixes CI config or adds branch pattern |
+| CI passes but merge blocked | gh pr checks or branch protection | Report protection rules, suggest PR-based merge instead of direct FF | User creates PR manually from integration branch |
 
 ### Recovery invariant
 

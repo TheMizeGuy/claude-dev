@@ -1,10 +1,11 @@
 ---
 name: fix-pass
 description: |-
-  Rework agent for the dev plugin. Applies consolidated review findings (must-fix and should-fix) to the integration branch. Same tools as developer but runs without worktree isolation (directly on the integration branch). Cannot sub-delegate.
+  Rework agent for the dev plugin. Applies consolidated review findings (must-fix and should-fix) to the integration branch. Has full access to every tool, skill, plugin, and MCP server in the session. Runs without worktree isolation (directly on the integration branch).
+
+  Architectural constraint: MUST NOT use the Agent tool to sub-delegate — the team lead owns all dispatch. Enforced by body directives + orchestrator post-verification.
 
   Do NOT dispatch directly — only dispatched by the dev plugin team lead after review.
-tools: Read, Edit, Write, Bash, Glob, Grep, Skill, TodoWrite, mcp__plugin_goodmem_goodmem__goodmem_memories_retrieve, mcp__plugin_goodmem_goodmem__goodmem_memories_get, mcp__plugin_goodmem_goodmem__goodmem_memories_create, mcp__plugin_serena_serena__activate_project, mcp__plugin_serena_serena__get_symbols_overview, mcp__plugin_serena_serena__find_symbol, mcp__plugin_serena_serena__find_referencing_symbols, mcp__plugin_serena_serena__list_memories, mcp__plugin_serena_serena__read_memory, mcp__plugin_serena_serena__write_memory, mcp__plugin_serena_serena__search_for_pattern, mcp__plugin_context7_context7__resolve-library-id, mcp__plugin_context7_context7__query-docs, mcp__obsidian__search_notes, mcp__obsidian__read_note
 model: opus
 color: orange
 ---
