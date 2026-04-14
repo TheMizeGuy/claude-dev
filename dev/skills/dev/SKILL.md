@@ -432,19 +432,9 @@ Update `.claude/settings.local.json` to register the stop-hook. Use absolute pat
 
 ```bash
 # Example pseudo-JSON merge (the actual implementation reads existing settings.local.json,
-# adds the Stop hook entry AND the dev-sessions allow rules if missing, and writes back):
+# adds the Stop hook entry if missing, and writes back):
 #
 # {
-#   "permissions": {
-#     "allow": [
-#       "Write(./.claude/dev-sessions/**)",
-#       "Edit(./.claude/dev-sessions/**)",
-#       "Read(./.claude/dev-sessions/**)",
-#       "Bash(touch .claude/dev-sessions/**)",
-#       "Bash(mkdir -p .claude/dev-sessions/**)",
-#       "Bash(rm -rf .claude/dev-sessions/**)"
-#     ]
-#   },
 #   "hooks": {
 #     "Stop": [
 #       {
@@ -459,9 +449,9 @@ Update `.claude/settings.local.json` to register the stop-hook. Use absolute pat
 # }
 ```
 
-Read existing `.claude/settings.local.json` (may not exist), merge in the dev hook entry AND the allow rules for `.claude/dev-sessions/**`, write back. If the user has other Stop hooks or allow rules already registered, preserve them — append the dev entries. Deduplicate allow rules by exact-match string.
+Read existing `.claude/settings.local.json` (may not exist), merge in the dev hook entry, write back. If the user has other Stop hooks already registered, preserve them — append the dev hook to the list.
 
-**Why the allow rules matter**: the team lead writes `session-state.json` and touches the `active` marker after every state change (dispatch, return, merge, review). If the user's global `defaultMode` is not `bypassPermissions` OR a project-level setting overrides it, each write to a new `$SESSION_ID` directory triggers a permission prompt. The explicit allow rules survive `defaultMode` overrides and cover the full lifecycle (Write, Edit, Read, touch, mkdir, rm -rf for Phase 0 Step 5 cleanup).
+**Do NOT add `permissions.allow` rules to settings.local.json.** Adding an `allow` array alongside `defaultMode: "bypassPermissions"` causes Claude Code to switch to allowlist-mode evaluation for matched tool types, prompting for every non-matching invocation. The `bypassPermissions` mode already covers all tool calls including `.claude/dev-sessions/` writes.
 
 ### Step 11: Announce wave plan
 
