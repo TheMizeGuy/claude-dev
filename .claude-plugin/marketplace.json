@@ -3,14 +3,15 @@
   "name": "claude-dev",
   "description": "Marketplace for the dev plugin: autonomous multi-agent development team orchestrator for Claude Code.",
   "owner": {
-    "name": "mize"
+    "name": "TheMizeGuy",
+    "email": "ben@meipath.com"
   },
   "plugins": [
     {
       "name": "dev",
-      "description": "Autonomous multi-agent development team orchestrator. Lead Opus 4.6 agent dispatches developer/reviewer/fix-pass subagents in KANBAN or AD-HOC mode with worktree isolation and three-stage review.",
+      "description": "Autonomous multi-agent development team orchestrator. A lead agent, running on the session model (always the strongest available Claude), dispatches developer/reviewer/fix-pass subagents in KANBAN or AD-HOC mode with worktree isolation and three-stage review.",
       "source": "./dev",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "workflow",
       "homepage": "https://github.com/TheMizeGuy/claude-dev"
     }

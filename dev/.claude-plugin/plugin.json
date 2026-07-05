@@ -1,7 +1,11 @@
 {
   "name": "dev",
-  "version": "0.1.0",
-  "description": "Multi-agent development team orchestrator. A lead Opus 4.6 agent assumes the team lead role, pulls kanban stories via scrum-master integration, dispatches Opus developer/reviewer/fix-pass subagents + Codex, runs each story through a full dev-review-rework cycle, and dynamically routes tasks to the best available skill/plugin/MCP. Scales to large batches via sequential waves from the primary lead. Fully autonomous with session-scoped stop-hook gating.",
+  "version": "0.1.1",
+  "description": "Multi-agent development team orchestrator. A lead agent, running on the session model (always the strongest available Claude), assumes the team lead role, pulls kanban stories via scrum-master integration, dispatches developer/reviewer/fix-pass subagents + Codex, runs each story through a full dev-review-rework cycle, and dynamically routes tasks to the best available skill/plugin/MCP. Scales to large batches via sequential waves from the primary lead. Fully autonomous with session-scoped stop-hook gating.",
+  "author": {
+    "name": "TheMizeGuy",
+    "email": "ben@meipath.com"
+  },
   "keywords": [
     "dev-team",
     "multi-agent",

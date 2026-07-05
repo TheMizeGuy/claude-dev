@@ -1,3 +1,8 @@
 .claude/dev-sessions/
 .DS_Store
 *.swp
+.serena/
+.claude/
+.anti-slop/
+.remember/
+node_modules/

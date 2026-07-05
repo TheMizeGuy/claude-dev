@@ -1,10 +1,10 @@
 ---
 name: secondary-lead-DO-NOT-DISPATCH
 description: |-
-  DO NOT DISPATCH. DOCUMENTATION ONLY. This file preserves the intended architecture for secondary team leads pending a platform fix. Secondary leads are currently NON-FUNCTIONAL because Claude Code sub-agents never get the Agent tool in in-process mode (anthropics/claude-code#46424, #31977, #47898). Do not invoke this agent via subagent_type. See spec Section 8 for current large-batch behavior.
+  DO NOT DISPATCH — documentation only, never invoked via subagent_type. This file preserves the intended architecture for secondary team leads pending a platform fix. Secondary leads are currently NON-FUNCTIONAL because Claude Code sub-agents never receive the Agent tool in in-process mode (anthropics/claude-code#46424, #31977, #47898). The primary team lead (skills/dev/SKILL.md) performs all dispatching; any invocation of this agent is a defect. Current large-batch behavior is documented in the skill's Large Batch Handling section (skills/dev/references/kanban-phase-6-finalize.md).
 ---
 
-# ⚠️ DO NOT DISPATCH — DOCUMENTATION ONLY ⚠️
+# DO NOT DISPATCH — DOCUMENTATION ONLY
 
 **This file is preserved as a reference for the intended secondary-lead architecture. It is NOT a functional agent. The primary team lead (SKILL.md) does all dispatching. There is no hierarchy in the current runtime.**
 
@@ -32,4 +32,4 @@ When unblocked:
 
 ## Current large-batch behavior
 
-See spec Section 8: primary team lead runs more sequential waves (5-15 waves for large batches). No hierarchy. Cost guard scales with story count.
+See the skill's Large Batch Handling section (`skills/dev/references/kanban-phase-6-finalize.md`; spec Section 8): primary team lead runs more sequential waves (5-15 waves for large batches). No hierarchy. Cost guard scales with story count.
