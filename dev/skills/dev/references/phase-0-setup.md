@@ -115,7 +115,7 @@ The catalog is inlined into every subagent briefing via `{CAPABILITY_CATALOG}`. 
 
 ### Step 3.6: Integration-ancestry pre-flight (MANDATORY — auto-invoked)
 
-Before any dispatch, verify the integration branch is a superset of the default branch. This catches stale-base drift — the failure mode that landed 68 commits of a TypeScript migration against a 2-day-stale fork (mac-terminal-project 2026-04-21).
+Before any dispatch, verify the integration branch is a superset of the default branch. This catches stale-base drift — the failure mode that landed 68 commits of a TypeScript migration against a 2-day-stale fork on a real monorepo migration sweep.
 
 ```bash
 # Determine integration + default branches
@@ -151,7 +151,7 @@ if [[ -n "$UNPUSHED_BRANCHES" ]]; then
   echo "  [ahead N] — N unpushed commits on this branch. Push or archive before assuming 'done'."
   echo "  [gone]     — upstream deleted. Delete the branch or re-push if work still relevant."
   echo ""
-  echo "Rationale: on 2026-04-21 a mac-terminal sweep discovered 30+ product-feature commits"
+  echo "Rationale: a real migration sweep once discovered 30+ product-feature commits"
   echo "on local main that were never pushed. They were orphaned from remote history and"
   echo "invisible to the ancestry check above. A secondary audit catches this class of drift."
 fi

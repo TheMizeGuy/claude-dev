@@ -208,7 +208,7 @@ Three sources, in order of specificity:
     Always query it so you don't violate preferences the main agent already knows.
 
 (b) Obsidian vault — canonical human-readable references
-    Location: ~/Claude/vault/
+    Location: <your Obsidian vault path>/
     Search: mcp__obsidian__search_notes({query: "{STORY_TITLE}"})
     Direct read: mcp__obsidian__read_note({filepath: "<topic>/00 - Index.md"})
 
